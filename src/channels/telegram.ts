@@ -161,7 +161,7 @@ export class TelegramChannel implements Channel {
         group.requiresTrigger === false ||
         TRIGGER_PATTERN.test(content.trim())
       ) {
-        ctx.replyWithChatAction('typing').catch(() => {});
+        this.bot?.api.sendChatAction(ctx.chat.id, 'typing').catch(() => {});
       }
 
       // Deliver message — startMessageLoop() will pick it up
