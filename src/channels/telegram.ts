@@ -69,6 +69,13 @@ export class TelegramChannel implements Channel {
       },
     });
 
+    // Register command menu visible when user types "/"
+    this.bot.api.setMyCommands([
+      { command: 'ping', description: 'Check if the bot is online' },
+      { command: 'chatid', description: 'Show this chat\'s ID and type' },
+      { command: 'compact', description: 'Compact conversation context' },
+    ]);
+
     // Command to get chat ID (useful for registration)
     this.bot.command('chatid', (ctx) => {
       const chatId = ctx.chat.id;
