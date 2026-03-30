@@ -301,7 +301,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  await channel.sendDraft?.(chatJid, '⏳');
+  // Typing indicator only — no ⏳ placeholder message.
+  // Sending a message (like ⏳) cancels typing, and editMessageText
+  // doesn't cancel stale typing. Both conflict, so use typing alone.
   startTypingLoop(channel, chatJid);
   let hadError = false;
   let outputSentToUser = false;
@@ -326,22 +328,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
       if (result.status === 'success') {
         stopTypingLoop(chatJid);
-        // Clear orphaned ⏳ if no visible text was sent (e.g. internal-only
-        // output from a piped follow-up). If sendMessage already edited the
-        // placeholder, clearDraft is a no-op.
-        await channel.clearDraft?.(chatJid)?.catch(() => {});
         queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {
         stopTypingLoop(chatJid);
-        await channel.clearDraft?.(chatJid)?.catch(() => {});
         hadError = true;
       }
     });
   } finally {
     stopTypingLoop(chatJid);
-    await channel.clearDraft?.(chatJid)?.catch(() => {});
   }
   if (idleTimer) clearTimeout(idleTimer);
 
@@ -534,12 +530,6 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Send ⏳ placeholder THEN start typing loop.
-            // Telegram clears typing when the bot sends any message, so
-            // typing must start AFTER the draft to avoid being cancelled.
-            try {
-              await channel.sendDraft?.(chatJid, '⏳');
-            } catch {}
             startTypingLoop(channel, chatJid);
           } else {
             // No active container — enqueue for a new one
