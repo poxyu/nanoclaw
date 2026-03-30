@@ -326,11 +326,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
       if (result.status === 'success') {
         stopTypingLoop(chatJid);
+        // Clear orphaned ⏳ if no visible text was sent (e.g. internal-only
+        // output from a piped follow-up). If sendMessage already edited the
+        // placeholder, clearDraft is a no-op.
+        await channel.clearDraft?.(chatJid)?.catch(() => {});
         queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {
         stopTypingLoop(chatJid);
+        await channel.clearDraft?.(chatJid)?.catch(() => {});
         hadError = true;
       }
     });
@@ -529,10 +534,12 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Show placeholder + typing while the container processes.
-            // startTypingLoop refreshes every 4s; stopTypingLoop is called
-            // by the processGroupMessages callback when output arrives.
-            channel.sendDraft?.(chatJid, '⏳')?.catch(() => {});
+            // Send ⏳ placeholder THEN start typing loop.
+            // Telegram clears typing when the bot sends any message, so
+            // typing must start AFTER the draft to avoid being cancelled.
+            try {
+              await channel.sendDraft?.(chatJid, '⏳');
+            } catch {}
             startTypingLoop(channel, chatJid);
           } else {
             // No active container — enqueue for a new one
