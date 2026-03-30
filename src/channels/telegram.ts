@@ -48,13 +48,9 @@ export class TelegramChannel implements Channel {
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
-  // Tracks placeholder message IDs for group chats (where sendMessageDraft
-  // doesn't work). Real drafts (private chats) auto-clear on sendMessage.
-  private placeholderMessages = new Map<string, number>(); // jid → message_id
-  // Latest Telegram update_id per chat — used as draft_id for sendMessageDraft.
-  // The draft_id must reference the user's update so Telegram correctly
-  // associates the "composing" overlay with the triggering message.
-  private lastUpdateIds = new Map<string, number>(); // jid → update_id
+  // Active "⏳" placeholder per chat. On first response, the placeholder is
+  // EDITED into the response text (no delete → no "deleted message" artifact).
+  private placeholders = new Map<string, number>(); // jid → message_id
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -159,7 +155,6 @@ export class TelegramChannel implements Channel {
 
       // Store update_id for sendMessageDraft (draft_id must reference the
       // user's update so Telegram renders the draft correctly)
-      this.lastUpdateIds.set(chatJid, ctx.update.update_id);
 
       // Deliver message — startMessageLoop() will pick it up
       this.opts.onMessage(chatJid, {
@@ -184,7 +179,6 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
-      this.lastUpdateIds.set(chatJid, ctx.update.update_id);
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -220,7 +214,6 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
-      this.lastUpdateIds.set(chatJid, ctx.update.update_id);
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -288,7 +281,6 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
-      this.lastUpdateIds.set(chatJid, ctx.update.update_id);
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -391,15 +383,40 @@ export class TelegramChannel implements Channel {
       return;
     }
 
-    // Auto-clear any placeholder before sending the real message.
-    // Real drafts (sendMessageDraft) auto-clear on Telegram's side.
-    await this.clearDraft(jid);
-
     try {
       const numericId = jid.replace(/^tg:/, '');
       const options = threadId
         ? { message_thread_id: parseInt(threadId, 10) }
         : {};
+
+      // If there's an active placeholder and the response fits in one message,
+      // edit the placeholder into the response. No deletion = no "deleted
+      // message" artifact. This is the pattern used by production AI bots.
+      const placeholderId = this.placeholders.get(jid);
+      if (placeholderId && text.length <= 4096) {
+        this.placeholders.delete(jid);
+        try {
+          try {
+            await this.bot.api.editMessageText(
+              numericId,
+              placeholderId,
+              text,
+              { parse_mode: 'Markdown' },
+            );
+          } catch {
+            await this.bot.api.editMessageText(numericId, placeholderId, text);
+          }
+          logger.info({ jid, length: text.length }, 'Telegram message sent (edited placeholder)');
+          return;
+        } catch {
+          // Edit failed — delete placeholder and send normally
+          await this.bot.api.deleteMessage(numericId, placeholderId).catch(() => {});
+        }
+      } else if (placeholderId) {
+        // Response too long for edit — delete placeholder, send as new messages
+        this.placeholders.delete(jid);
+        await this.bot.api.deleteMessage(numericId, placeholderId).catch(() => {});
+      }
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
@@ -455,25 +472,11 @@ export class TelegramChannel implements Channel {
     await this.clearDraft(jid);
     const numericId = Number(jid.replace(/^tg:/, ''));
 
-    // Try native draft (private chats — shows animated "composing" overlay).
-    // draft_id must be the update_id of the user's message so Telegram
-    // correctly associates the draft with the triggering conversation.
-    const draftId = this.lastUpdateIds.get(jid);
-    if (draftId) {
-      try {
-        await this.bot.api.sendMessageDraft(numericId, draftId, text);
-        return;
-      } catch {
-        // Expected for groups — fall through to placeholder
-      }
-    }
-
-    // Fallback: silent placeholder message (groups or draft failure)
     try {
       const msg = await this.bot.api.sendMessage(numericId, text, {
         disable_notification: true,
       });
-      this.placeholderMessages.set(jid, msg.message_id);
+      this.placeholders.set(jid, msg.message_id);
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send processing indicator');
     }
@@ -481,16 +484,15 @@ export class TelegramChannel implements Channel {
 
   async clearDraft(jid: string): Promise<void> {
     try {
-      const msgId = this.placeholderMessages.get(jid);
+      const msgId = this.placeholders.get(jid);
       if (msgId && this.bot) {
-        this.placeholderMessages.delete(jid);
+        this.placeholders.delete(jid);
         const numericId = Number(jid.replace(/^tg:/, ''));
         await this.bot.api.deleteMessage(numericId, msgId).catch(() => {});
       }
     } catch {
-      // Best-effort cleanup — must not block sendMessage
+      // Best-effort cleanup
     }
-    // Real drafts auto-clear when sendMessage is called — nothing to do
   }
 }
 

@@ -92,9 +92,9 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
-  // Optional: show a processing indicator (Telegram uses sendMessageDraft for
-  // native "composing" animation; falls back to a silent placeholder message).
-  // Cleared automatically when sendMessage is called, or explicitly via clearDraft.
+  // Optional: show a "⏳" processing indicator. First sendMessage after
+  // sendDraft edits the placeholder into the response (no delete/flicker).
+  // Call clearDraft on error to remove it.
   sendDraft?(jid: string, text: string): Promise<void>;
   // Optional: cancel the processing indicator without sending a message.
   clearDraft?(jid: string): Promise<void>;
