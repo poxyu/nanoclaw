@@ -153,8 +153,16 @@ export class TelegramChannel implements Channel {
         return;
       }
 
-      // Store update_id for sendMessageDraft (draft_id must reference the
-      // user's update so Telegram renders the draft correctly)
+      // Immediate typing feedback — fires within milliseconds of receiving
+      // the message, well before the 2s main-loop poll picks it up.
+      // Only for messages that will actually be processed.
+      if (
+        group.isMain ||
+        group.requiresTrigger === false ||
+        TRIGGER_PATTERN.test(content.trim())
+      ) {
+        ctx.replyWithChatAction('typing').catch(() => {});
+      }
 
       // Deliver message — startMessageLoop() will pick it up
       this.opts.onMessage(chatJid, {
@@ -467,7 +475,7 @@ export class TelegramChannel implements Channel {
       const numericId = jid.replace(/^tg:/, '');
       await this.bot.api.sendChatAction(numericId, 'typing');
     } catch (err) {
-      logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
+      logger.warn({ jid, err }, 'Failed to send Telegram typing indicator');
     }
   }
 

@@ -527,7 +527,7 @@ async function startMessageLoop(): Promise<void> {
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
           if (queue.sendMessage(chatJid, formatted)) {
-            logger.debug(
+            logger.info(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
             );
