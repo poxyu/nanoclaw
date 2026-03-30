@@ -397,25 +397,29 @@ export class TelegramChannel implements Channel {
         this.placeholders.delete(jid);
         try {
           try {
-            await this.bot.api.editMessageText(
-              numericId,
-              placeholderId,
-              text,
-              { parse_mode: 'Markdown' },
-            );
+            await this.bot.api.editMessageText(numericId, placeholderId, text, {
+              parse_mode: 'Markdown',
+            });
           } catch {
             await this.bot.api.editMessageText(numericId, placeholderId, text);
           }
-          logger.info({ jid, length: text.length }, 'Telegram message sent (edited placeholder)');
+          logger.info(
+            { jid, length: text.length },
+            'Telegram message sent (edited placeholder)',
+          );
           return;
         } catch {
           // Edit failed — delete placeholder and send normally
-          await this.bot.api.deleteMessage(numericId, placeholderId).catch(() => {});
+          await this.bot.api
+            .deleteMessage(numericId, placeholderId)
+            .catch(() => {});
         }
       } else if (placeholderId) {
         // Response too long for edit — delete placeholder, send as new messages
         this.placeholders.delete(jid);
-        await this.bot.api.deleteMessage(numericId, placeholderId).catch(() => {});
+        await this.bot.api
+          .deleteMessage(numericId, placeholderId)
+          .catch(() => {});
       }
 
       // Telegram has a 4096 character limit per message — split if needed
