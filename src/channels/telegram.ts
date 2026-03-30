@@ -241,7 +241,9 @@ export class TelegramChannel implements Channel {
 
         if (transcript) {
           // Echo transcription back so user can verify what was understood
-          await ctx.reply(`🎤 _${transcript}_`, { parse_mode: 'Markdown' }).catch(() => {});
+          await ctx
+            .reply(`🎤 _${transcript}_`, { parse_mode: 'Markdown' })
+            .catch(() => {});
 
           this.opts.onMessage(chatJid, {
             id: ctx.message.message_id.toString(),
