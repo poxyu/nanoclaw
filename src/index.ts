@@ -281,10 +281,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Secondary indicator: typing — shows in chat header and chat list.
   await channel.sendDraft?.(chatJid, '⏳');
   channel.setTyping?.(chatJid, true)?.catch(() => {});
-  const typingInterval = setInterval(
+  let typingInterval: ReturnType<typeof setInterval> | null = setInterval(
     () => channel.setTyping?.(chatJid, true)?.catch(() => {}),
     4000,
   );
+  const stopTyping = () => {
+    if (typingInterval) {
+      clearInterval(typingInterval);
+      typingInterval = null;
+    }
+  };
   let hadError = false;
   let outputSentToUser = false;
 
@@ -296,11 +302,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           typeof result.result === 'string'
             ? result.result
             : JSON.stringify(result.result);
-        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
         logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
         if (text) {
-          // sendMessage edits the placeholder on first call, sends normally after
+          stopTyping();
           await channel.sendMessage(chatJid, text);
           outputSentToUser = true;
         }
@@ -308,15 +313,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
 
       if (result.status === 'success') {
+        stopTyping();
         queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {
+        stopTyping();
         hadError = true;
       }
     });
   } finally {
-    clearInterval(typingInterval);
+    stopTyping();
     await channel.clearDraft?.(chatJid)?.catch(() => {});
   }
   if (idleTimer) clearTimeout(idleTimer);
