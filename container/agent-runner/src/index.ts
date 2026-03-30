@@ -36,6 +36,7 @@ interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  streamingText?: string;
 }
 
 interface SessionEntry {
@@ -449,6 +450,18 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+
+      // Emit partial text for streaming edits (live-updating message in chat)
+      const content = (message as any).message?.content;
+      if (Array.isArray(content)) {
+        const text = content
+          .filter((c: any) => c.type === 'text')
+          .map((c: any) => c.text)
+          .join('');
+        if (text.trim()) {
+          writeOutput({ status: 'success', result: null, streamingText: text });
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {

@@ -51,6 +51,11 @@ export class TelegramChannel implements Channel {
   // Active "⏳" placeholder per chat. On first response, the placeholder is
   // EDITED into the response text (no delete → no "deleted message" artifact).
   private placeholders = new Map<string, number>(); // jid → message_id
+  // Active streaming message per chat (live-updating text as agent produces output)
+  private streamingMessages = new Map<string, number>(); // jid → message_id
+  private lastStreamingEdit = new Map<string, number>(); // jid → timestamp
+  private lastStreamingText = new Map<string, string>(); // jid → last sent text
+  private streamingTimers = new Map<string, ReturnType<typeof setTimeout>>(); // jid → pending flush
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -505,6 +510,120 @@ export class TelegramChannel implements Channel {
     } catch {
       // Best-effort cleanup
     }
+  }
+
+  async updateStreamingMessage(jid: string, text: string): Promise<void> {
+    if (!this.bot) return;
+
+    // Skip if text hasn't changed since last edit
+    if (this.lastStreamingText.get(jid) === text) return;
+
+    const numericId = jid.replace(/^tg:/, '');
+    const msgId = this.streamingMessages.get(jid);
+
+    // Trailing-edge throttle: if within cooldown, schedule the latest text
+    // for delivery when the window expires (guarantees latest text is shown)
+    if (msgId) {
+      const now = Date.now();
+      const lastEdit = this.lastStreamingEdit.get(jid) || 0;
+      const elapsed = now - lastEdit;
+      if (elapsed < 1200) {
+        // Clear any existing pending flush, schedule new one with latest text
+        const existing = this.streamingTimers.get(jid);
+        if (existing) clearTimeout(existing);
+        this.streamingTimers.set(
+          jid,
+          setTimeout(() => {
+            this.streamingTimers.delete(jid);
+            this.updateStreamingMessage(jid, text);
+          }, 1200 - elapsed),
+        );
+        return;
+      }
+    }
+
+    // Clear any pending flush since we're delivering now
+    const pending = this.streamingTimers.get(jid);
+    if (pending) {
+      clearTimeout(pending);
+      this.streamingTimers.delete(jid);
+    }
+
+    // Telegram 4096 char limit — truncate for streaming preview
+    const truncated =
+      text.length > 4090 ? text.slice(0, 4087) + '…' : text;
+
+    if (msgId) {
+      // Edit existing streaming message
+      try {
+        await this.bot.api.editMessageText(numericId, msgId, truncated, {
+          parse_mode: 'Markdown',
+        });
+      } catch (err: any) {
+        if (String(err?.description || '').includes('not modified')) {
+          this.lastStreamingText.set(jid, text);
+          return;
+        }
+        try {
+          await this.bot.api.editMessageText(numericId, msgId, truncated);
+        } catch (plainErr: any) {
+          if (!String(plainErr?.description || '').includes('not modified')) {
+            logger.debug({ jid, err: plainErr }, 'Streaming edit failed');
+            return;
+          }
+        }
+      }
+      this.lastStreamingText.set(jid, text);
+      this.lastStreamingEdit.set(jid, Date.now());
+    } else {
+      // Send new streaming message
+      try {
+        const msg = await this.bot.api.sendMessage(numericId, truncated, {
+          parse_mode: 'Markdown',
+        });
+        this.streamingMessages.set(jid, msg.message_id);
+        this.lastStreamingText.set(jid, text);
+        this.lastStreamingEdit.set(jid, Date.now());
+      } catch {
+        try {
+          const msg = await this.bot.api.sendMessage(numericId, truncated);
+          this.streamingMessages.set(jid, msg.message_id);
+          this.lastStreamingText.set(jid, text);
+          this.lastStreamingEdit.set(jid, Date.now());
+        } catch (err) {
+          logger.error({ jid, err }, 'Failed to send streaming message');
+        }
+      }
+    }
+  }
+
+  promoteStreamingMessage(jid: string): void {
+    // Cancel any pending throttled flush
+    const timer = this.streamingTimers.get(jid);
+    if (timer) {
+      clearTimeout(timer);
+      this.streamingTimers.delete(jid);
+    }
+
+    const msgId = this.streamingMessages.get(jid);
+    if (msgId) {
+      this.streamingMessages.delete(jid);
+      this.lastStreamingEdit.delete(jid);
+      this.lastStreamingText.delete(jid);
+      // Move to placeholders so sendMessage can edit/replace it
+      this.placeholders.set(jid, msgId);
+    }
+  }
+
+  resetStreaming(jid: string): void {
+    const timer = this.streamingTimers.get(jid);
+    if (timer) {
+      clearTimeout(timer);
+      this.streamingTimers.delete(jid);
+    }
+    this.streamingMessages.delete(jid);
+    this.lastStreamingEdit.delete(jid);
+    this.lastStreamingText.delete(jid);
   }
 }
 

@@ -48,7 +48,12 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound } from './router.js';
+import {
+  findChannel,
+  formatMessages,
+  formatOutbound,
+  stripInternalTags,
+} from './router.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -306,20 +311,36 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // doesn't cancel stale typing. Both conflict, so use typing alone.
   startTypingLoop(channel, chatJid);
   let hadError = false;
+  let hadStreamingOutput = false;
   let outputSentToUser = false;
 
   let output: 'success' | 'error' = 'error';
   try {
     output = await runAgent(group, prompt, chatJid, async (result) => {
+      // Streaming text: live-updating message as agent produces output
+      if (result.streamingText) {
+        const text = stripInternalTags(result.streamingText);
+        if (text && channel.updateStreamingMessage) {
+          stopTypingLoop(chatJid);
+          await channel.updateStreamingMessage(chatJid, text + ' ▍');
+          hadStreamingOutput = true;
+        }
+        resetIdleTimer();
+        return;
+      }
+
       if (result.result) {
         const raw =
           typeof result.result === 'string'
             ? result.result
             : JSON.stringify(result.result);
-        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        const text = stripInternalTags(raw);
         logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
         if (text) {
           stopTypingLoop(chatJid);
+          // Promote streaming message to placeholder so sendMessage
+          // can edit it into the final result (or replace if too long)
+          channel.promoteStreamingMessage?.(chatJid);
           await channel.sendMessage(chatJid, text);
           outputSentToUser = true;
         }
@@ -338,13 +359,25 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     });
   } finally {
     stopTypingLoop(chatJid);
+    if (outputSentToUser) {
+      // Result delivered via sendMessage — streaming state already cleaned up
+      // by promoteStreamingMessage + sendMessage in the onOutput callback.
+    } else if (hadStreamingOutput) {
+      // Streaming shown but no final result (error path) — clean up tracking
+      // state so next invocation starts fresh. Leave the partial message visible.
+      channel.resetStreaming?.(chatJid);
+    } else {
+      // No output reached the user — clean up any stale placeholder/streaming
+      channel.promoteStreamingMessage?.(chatJid);
+      await channel.clearDraft?.(chatJid);
+    }
   }
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
     // the user got their response and re-processing would send duplicates.
-    if (outputSentToUser) {
+    if (outputSentToUser || hadStreamingOutput) {
       logger.warn(
         { group: group.name },
         'Agent error after output was sent, skipping cursor rollback to prevent duplicates',

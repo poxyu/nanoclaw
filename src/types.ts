@@ -98,6 +98,16 @@ export interface Channel {
   sendDraft?(jid: string, text: string): Promise<void>;
   // Optional: cancel the processing indicator without sending a message.
   clearDraft?(jid: string): Promise<void>;
+  // Optional: streaming edits — live-updating message as agent produces output.
+  // First call sends a new message; subsequent calls edit it.
+  updateStreamingMessage?(jid: string, text: string): Promise<void>;
+  // Move the streaming message ID to the placeholder slot so the next
+  // sendMessage() can edit or replace it with the final result.
+  promoteStreamingMessage?(jid: string): void;
+  // Clean up streaming tracking state (maps, timers) without deleting the
+  // message from chat or moving it to placeholder. Use on error paths where
+  // partial streaming output should remain visible to the user.
+  resetStreaming?(jid: string): void;
 }
 
 // Callback type that channels use to deliver inbound messages
