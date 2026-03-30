@@ -277,28 +277,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  // Show a processing indicator: native draft in private chats (animated
-  // "composing" overlay), silent placeholder in groups. Cleared automatically
-  // when sendMessage is called. Typing indicator kept as secondary signal.
+  // Primary indicator: "⏳" placeholder — edited into the response on arrival.
+  // Secondary indicator: typing — shows in chat header and chat list.
   await channel.sendDraft?.(chatJid, '⏳');
   channel.setTyping?.(chatJid, true)?.catch(() => {});
-  let typingInterval: ReturnType<typeof setInterval> | null = setInterval(
+  const typingInterval = setInterval(
     () => channel.setTyping?.(chatJid, true)?.catch(() => {}),
     4000,
   );
-  const stopTyping = () => {
-    if (typingInterval) {
-      clearInterval(typingInterval);
-      typingInterval = null;
-    }
-  };
   let hadError = false;
   let outputSentToUser = false;
 
   let output: 'success' | 'error' = 'error';
   try {
     output = await runAgent(group, prompt, chatJid, async (result) => {
-      // Streaming output callback — called for each agent result
       if (result.result) {
         const raw =
           typeof result.result === 'string'
@@ -308,31 +300,23 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
         logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
         if (text) {
-          stopTyping();
-          // sendMessage auto-clears the draft/placeholder
+          // sendMessage edits the placeholder on first call, sends normally after
           await channel.sendMessage(chatJid, text);
           outputSentToUser = true;
-          // Don't restart typing after sending — the draft handled the
-          // initial wait, and intermediate messages are visible feedback.
-          // Restarting typing causes "typing..." to persist after the final
-          // response until the success status arrives seconds later.
         }
-        // Only reset idle timer on actual results, not session-update markers (result: null)
         resetIdleTimer();
       }
 
       if (result.status === 'success') {
-        stopTyping();
         queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {
-        stopTyping();
         hadError = true;
       }
     });
   } finally {
-    stopTyping();
+    clearInterval(typingInterval);
     await channel.clearDraft?.(chatJid)?.catch(() => {});
   }
   if (idleTimer) clearTimeout(idleTimer);
@@ -526,13 +510,9 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Show draft/typing while the container processes
+            // Show placeholder + typing while the container processes
             channel.sendDraft?.(chatJid, '⏳')?.catch(() => {});
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-              );
+            channel.setTyping?.(chatJid, true)?.catch(() => {});
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
