@@ -4,6 +4,7 @@ import { Api, Bot } from 'grammy';
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
+import { downloadToTemp, transcribeAudio } from '../transcription.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -203,8 +204,100 @@ export class TelegramChannel implements Channel {
 
     this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
-    this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
+    this.bot.on('message:voice', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+
+      // Show typing while transcribing
+      await this.setTyping(chatJid, true);
+      const typingInterval = setInterval(() => this.setTyping(chatJid, true), 4000);
+
+      try {
+        const file = await ctx.getFile();
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+        const tmpPath = await downloadToTemp(fileUrl, '.ogg');
+        const transcript = await transcribeAudio(tmpPath);
+
+        if (transcript) {
+          this.opts.onMessage(chatJid, {
+            id: ctx.message.message_id.toString(),
+            chat_jid: chatJid,
+            sender: ctx.from?.id?.toString() || '',
+            sender_name: senderName,
+            content: `[Voice: ${transcript}]`,
+            timestamp,
+            is_from_me: false,
+          });
+          logger.info({ chatJid, sender: senderName }, 'Voice message transcribed');
+        } else {
+          storeNonText(ctx, '[Voice message — transcription failed]');
+        }
+      } catch (err: any) {
+        logger.error({ err: err.message, chatJid }, 'Voice download/transcription error');
+        storeNonText(ctx, '[Voice message — transcription failed]');
+      } finally {
+        clearInterval(typingInterval);
+      }
+    });
+    this.bot.on('message:audio', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+
+      await this.setTyping(chatJid, true);
+      const typingInterval = setInterval(() => this.setTyping(chatJid, true), 4000);
+
+      try {
+        const file = await ctx.getFile();
+        const ext = file.file_path?.match(/\.[^.]+$/)?.[0] || '.ogg';
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+        const tmpPath = await downloadToTemp(fileUrl, ext);
+        const transcript = await transcribeAudio(tmpPath);
+
+        if (transcript) {
+          this.opts.onMessage(chatJid, {
+            id: ctx.message.message_id.toString(),
+            chat_jid: chatJid,
+            sender: ctx.from?.id?.toString() || '',
+            sender_name: senderName,
+            content: `[Audio: ${transcript}]`,
+            timestamp,
+            is_from_me: false,
+          });
+          logger.info({ chatJid, sender: senderName }, 'Audio message transcribed');
+        } else {
+          storeNonText(ctx, '[Audio — transcription failed]');
+        }
+      } catch (err: any) {
+        logger.error({ err: err.message, chatJid }, 'Audio download/transcription error');
+        storeNonText(ctx, '[Audio — transcription failed]');
+      } finally {
+        clearInterval(typingInterval);
+      }
+    });
     this.bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
       storeNonText(ctx, `[Document: ${name}]`);

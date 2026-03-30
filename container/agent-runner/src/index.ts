@@ -394,6 +394,8 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
+      model: process.env.NANOCLAW_MODEL || 'opus',
+      effort: (process.env.NANOCLAW_EFFORT as 'low' | 'medium' | 'high' | 'max') || 'max',
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
@@ -409,7 +411,8 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        'mcp__playwright__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -423,6 +426,13 @@ async function runQuery(
             NANOCLAW_CHAT_JID: containerInput.chatJid,
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+          },
+        },
+        playwright: {
+          command: 'npx',
+          args: ['@playwright/mcp', '--headless'],
+          env: {
+            DISPLAY: process.env.DISPLAY || '',
           },
         },
       },
