@@ -550,8 +550,7 @@ export class TelegramChannel implements Channel {
     }
 
     // Telegram 4096 char limit — truncate for streaming preview
-    const truncated =
-      text.length > 4090 ? text.slice(0, 4087) + '…' : text;
+    const truncated = text.length > 4090 ? text.slice(0, 4087) + '…' : text;
 
     if (msgId) {
       // Edit existing streaming message
