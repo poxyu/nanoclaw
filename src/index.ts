@@ -76,6 +76,30 @@ let messageLoopRunning = false;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
+// Per-group typing interval. Shared between processGroupMessages (first
+// message) and the piping path (follow-up messages in the same container).
+const typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
+
+function startTypingLoop(channel: Channel, chatJid: string): void {
+  stopTypingLoop(chatJid);
+  channel.setTyping?.(chatJid, true)?.catch(() => {});
+  typingIntervals.set(
+    chatJid,
+    setInterval(
+      () => channel.setTyping?.(chatJid, true)?.catch(() => {}),
+      4000,
+    ),
+  );
+}
+
+function stopTypingLoop(chatJid: string): void {
+  const interval = typingIntervals.get(chatJid);
+  if (interval) {
+    clearInterval(interval);
+    typingIntervals.delete(chatJid);
+  }
+}
+
 const onecli = new OneCLI({ url: ONECLI_URL });
 
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
@@ -277,20 +301,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  // Primary indicator: "⏳" placeholder — edited into the response on arrival.
-  // Secondary indicator: typing — shows in chat header and chat list.
   await channel.sendDraft?.(chatJid, '⏳');
-  channel.setTyping?.(chatJid, true)?.catch(() => {});
-  let typingInterval: ReturnType<typeof setInterval> | null = setInterval(
-    () => channel.setTyping?.(chatJid, true)?.catch(() => {}),
-    4000,
-  );
-  const stopTyping = () => {
-    if (typingInterval) {
-      clearInterval(typingInterval);
-      typingInterval = null;
-    }
-  };
+  startTypingLoop(channel, chatJid);
   let hadError = false;
   let outputSentToUser = false;
 
@@ -305,7 +317,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
         logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
         if (text) {
-          stopTyping();
+          stopTypingLoop(chatJid);
           await channel.sendMessage(chatJid, text);
           outputSentToUser = true;
         }
@@ -313,17 +325,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
 
       if (result.status === 'success') {
-        stopTyping();
+        stopTypingLoop(chatJid);
         queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {
-        stopTyping();
+        stopTypingLoop(chatJid);
         hadError = true;
       }
     });
   } finally {
-    stopTyping();
+    stopTypingLoop(chatJid);
     await channel.clearDraft?.(chatJid)?.catch(() => {});
   }
   if (idleTimer) clearTimeout(idleTimer);
@@ -517,9 +529,11 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Show placeholder + typing while the container processes
+            // Show placeholder + typing while the container processes.
+            // startTypingLoop refreshes every 4s; stopTypingLoop is called
+            // by the processGroupMessages callback when output arrives.
             channel.sendDraft?.(chatJid, '⏳')?.catch(() => {});
-            channel.setTyping?.(chatJid, true)?.catch(() => {});
+            startTypingLoop(channel, chatJid);
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
