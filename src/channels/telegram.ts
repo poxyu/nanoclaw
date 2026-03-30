@@ -51,6 +51,10 @@ export class TelegramChannel implements Channel {
   // Tracks placeholder message IDs for group chats (where sendMessageDraft
   // doesn't work). Real drafts (private chats) auto-clear on sendMessage.
   private placeholderMessages = new Map<string, number>(); // jid → message_id
+  // Latest Telegram update_id per chat — used as draft_id for sendMessageDraft.
+  // The draft_id must reference the user's update so Telegram correctly
+  // associates the "composing" overlay with the triggering message.
+  private lastUpdateIds = new Map<string, number>(); // jid → update_id
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -153,6 +157,10 @@ export class TelegramChannel implements Channel {
         return;
       }
 
+      // Store update_id for sendMessageDraft (draft_id must reference the
+      // user's update so Telegram renders the draft correctly)
+      this.lastUpdateIds.set(chatJid, ctx.update.update_id);
+
       // Deliver message — startMessageLoop() will pick it up
       this.opts.onMessage(chatJid, {
         id: msgId,
@@ -176,6 +184,7 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
+      this.lastUpdateIds.set(chatJid, ctx.update.update_id);
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -211,6 +220,7 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
+      this.lastUpdateIds.set(chatJid, ctx.update.update_id);
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -278,6 +288,7 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
+      this.lastUpdateIds.set(chatJid, ctx.update.update_id);
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -444,12 +455,17 @@ export class TelegramChannel implements Channel {
     await this.clearDraft(jid);
     const numericId = Number(jid.replace(/^tg:/, ''));
 
-    // Try native draft (private chats — shows animated "composing" overlay)
-    try {
-      await this.bot.api.sendMessageDraft(numericId, 1, text);
-      return;
-    } catch {
-      // Expected for groups — fall through to placeholder
+    // Try native draft (private chats — shows animated "composing" overlay).
+    // draft_id must be the update_id of the user's message so Telegram
+    // correctly associates the draft with the triggering conversation.
+    const draftId = this.lastUpdateIds.get(jid);
+    if (draftId) {
+      try {
+        await this.bot.api.sendMessageDraft(numericId, draftId, text);
+        return;
+      } catch {
+        // Expected for groups — fall through to placeholder
+      }
     }
 
     // Fallback: silent placeholder message (groups or draft failure)

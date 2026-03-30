@@ -292,15 +292,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       typingInterval = null;
     }
   };
-  const startTyping = () => {
-    if (!typingInterval) {
-      channel.setTyping?.(chatJid, true)?.catch(() => {});
-      typingInterval = setInterval(
-        () => channel.setTyping?.(chatJid, true)?.catch(() => {}),
-        4000,
-      );
-    }
-  };
   let hadError = false;
   let outputSentToUser = false;
 
@@ -321,9 +312,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           // sendMessage auto-clears the draft/placeholder
           await channel.sendMessage(chatJid, text);
           outputSentToUser = true;
-          // Agent may still be working (e.g. browsing after sending
-          // "opening site...") — typing indicator only, no new draft
-          startTyping();
+          // Don't restart typing after sending — the draft handled the
+          // initial wait, and intermediate messages are visible feedback.
+          // Restarting typing causes "typing..." to persist after the final
+          // response until the success status arrives seconds later.
         }
         // Only reset idle timer on actual results, not session-update markers (result: null)
         resetIdleTimer();
