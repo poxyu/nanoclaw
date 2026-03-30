@@ -48,6 +48,9 @@ export class TelegramChannel implements Channel {
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
+  // Tracks placeholder message IDs for group chats (where sendMessageDraft
+  // doesn't work). Real drafts (private chats) auto-clear on sendMessage.
+  private placeholderMessages = new Map<string, number>(); // jid → message_id
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -377,6 +380,10 @@ export class TelegramChannel implements Channel {
       return;
     }
 
+    // Auto-clear any placeholder before sending the real message.
+    // Real drafts (sendMessageDraft) auto-clear on Telegram's side.
+    await this.clearDraft(jid);
+
     try {
       const numericId = jid.replace(/^tg:/, '');
       const options = threadId
@@ -430,6 +437,44 @@ export class TelegramChannel implements Channel {
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
     }
+  }
+
+  async sendDraft(jid: string, text: string): Promise<void> {
+    if (!this.bot) return;
+    await this.clearDraft(jid);
+    const numericId = Number(jid.replace(/^tg:/, ''));
+
+    // Try native draft (private chats — shows animated "composing" overlay)
+    try {
+      await this.bot.api.sendMessageDraft(numericId, 1, text);
+      return;
+    } catch {
+      // Expected for groups — fall through to placeholder
+    }
+
+    // Fallback: silent placeholder message (groups or draft failure)
+    try {
+      const msg = await this.bot.api.sendMessage(numericId, text, {
+        disable_notification: true,
+      });
+      this.placeholderMessages.set(jid, msg.message_id);
+    } catch (err) {
+      logger.debug({ jid, err }, 'Failed to send processing indicator');
+    }
+  }
+
+  async clearDraft(jid: string): Promise<void> {
+    try {
+      const msgId = this.placeholderMessages.get(jid);
+      if (msgId && this.bot) {
+        this.placeholderMessages.delete(jid);
+        const numericId = Number(jid.replace(/^tg:/, ''));
+        await this.bot.api.deleteMessage(numericId, msgId).catch(() => {});
+      }
+    } catch {
+      // Best-effort cleanup — must not block sendMessage
+    }
+    // Real drafts auto-clear when sendMessage is called — nothing to do
   }
 }
 

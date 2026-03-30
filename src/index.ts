@@ -277,8 +277,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  await channel.setTyping?.(chatJid, true);
-  // Telegram's typing indicator expires after ~5s, refresh it every 4s
+  // Show a processing indicator: native draft in private chats (animated
+  // "composing" overlay), silent placeholder in groups. Cleared automatically
+  // when sendMessage is called. Typing indicator kept as secondary signal.
+  await channel.sendDraft?.(chatJid, '⏳');
+  channel.setTyping?.(chatJid, true)?.catch(() => {});
   let typingInterval: ReturnType<typeof setInterval> | null = setInterval(
     () => channel.setTyping?.(chatJid, true)?.catch(() => {}),
     4000,
@@ -287,43 +290,59 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (typingInterval) {
       clearInterval(typingInterval);
       typingInterval = null;
-      channel.setTyping?.(chatJid, false)?.catch(() => {});
+    }
+  };
+  const startTyping = () => {
+    if (!typingInterval) {
+      channel.setTyping?.(chatJid, true)?.catch(() => {});
+      typingInterval = setInterval(
+        () => channel.setTyping?.(chatJid, true)?.catch(() => {}),
+        4000,
+      );
     }
   };
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        stopTyping();
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  let output: 'success' | 'error' = 'error';
+  try {
+    output = await runAgent(group, prompt, chatJid, async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          stopTyping();
+          // sendMessage auto-clears the draft/placeholder
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+          // Agent may still be working (e.g. browsing after sending
+          // "opening site...") — typing indicator only, no new draft
+          startTyping();
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      stopTyping();
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        stopTyping();
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      stopTyping();
-      hadError = true;
-    }
-  });
-
-  stopTyping();
+      if (result.status === 'error') {
+        stopTyping();
+        hadError = true;
+      }
+    });
+  } finally {
+    stopTyping();
+    await channel.clearDraft?.(chatJid)?.catch(() => {});
+  }
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
@@ -515,7 +534,8 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Show typing indicator while the container processes the piped message
+            // Show draft/typing while the container processes
+            channel.sendDraft?.(chatJid, '⏳')?.catch(() => {});
             channel
               .setTyping?.(chatJid, true)
               ?.catch((err) =>

@@ -430,10 +430,12 @@ async function runQuery(
         },
         playwright: {
           command: 'npx',
-          args: ['@playwright/mcp', '--headless'],
-          env: {
-            DISPLAY: process.env.DISPLAY || '',
-          },
+          args: [
+            '@playwright/mcp',
+            '--headless',
+            '--no-sandbox',
+            '--executable-path', '/usr/bin/chromium',
+          ],
         },
       },
       hooks: {
