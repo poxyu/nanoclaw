@@ -394,8 +394,8 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
-      model: process.env.NANOCLAW_MODEL || 'opus',
-      effort: (process.env.NANOCLAW_EFFORT as 'low' | 'medium' | 'high' | 'max') || 'max',
+      model: process.env.NANOCLAW_MODEL || 'sonnet',
+      effort: (process.env.NANOCLAW_EFFORT as 'low' | 'medium' | 'high' | 'max') || 'high',
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,

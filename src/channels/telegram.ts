@@ -218,11 +218,20 @@ export class TelegramChannel implements Channel {
 
       const isGroup =
         ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
 
       // Show typing while transcribing
       await this.setTyping(chatJid, true);
-      const typingInterval = setInterval(() => this.setTyping(chatJid, true), 4000);
+      const typingInterval = setInterval(
+        () => this.setTyping(chatJid, true),
+        4000,
+      );
 
       try {
         const file = await ctx.getFile();
@@ -231,6 +240,9 @@ export class TelegramChannel implements Channel {
         const transcript = await transcribeAudio(tmpPath);
 
         if (transcript) {
+          // Echo transcription back so user can verify what was understood
+          await ctx.reply(`🎤 _${transcript}_`, { parse_mode: 'Markdown' }).catch(() => {});
+
           this.opts.onMessage(chatJid, {
             id: ctx.message.message_id.toString(),
             chat_jid: chatJid,
@@ -240,12 +252,18 @@ export class TelegramChannel implements Channel {
             timestamp,
             is_from_me: false,
           });
-          logger.info({ chatJid, sender: senderName }, 'Voice message transcribed');
+          logger.info(
+            { chatJid, sender: senderName },
+            'Voice message transcribed',
+          );
         } else {
           storeNonText(ctx, '[Voice message — transcription failed]');
         }
       } catch (err: any) {
-        logger.error({ err: err.message, chatJid }, 'Voice download/transcription error');
+        logger.error(
+          { err: err.message, chatJid },
+          'Voice download/transcription error',
+        );
         storeNonText(ctx, '[Voice message — transcription failed]');
       } finally {
         clearInterval(typingInterval);
@@ -265,10 +283,19 @@ export class TelegramChannel implements Channel {
 
       const isGroup =
         ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
 
       await this.setTyping(chatJid, true);
-      const typingInterval = setInterval(() => this.setTyping(chatJid, true), 4000);
+      const typingInterval = setInterval(
+        () => this.setTyping(chatJid, true),
+        4000,
+      );
 
       try {
         const file = await ctx.getFile();
@@ -287,12 +314,18 @@ export class TelegramChannel implements Channel {
             timestamp,
             is_from_me: false,
           });
-          logger.info({ chatJid, sender: senderName }, 'Audio message transcribed');
+          logger.info(
+            { chatJid, sender: senderName },
+            'Audio message transcribed',
+          );
         } else {
           storeNonText(ctx, '[Audio — transcription failed]');
         }
       } catch (err: any) {
-        logger.error({ err: err.message, chatJid }, 'Audio download/transcription error');
+        logger.error(
+          { err: err.message, chatJid },
+          'Audio download/transcription error',
+        );
         storeNonText(ctx, '[Audio — transcription failed]');
       } finally {
         clearInterval(typingInterval);
